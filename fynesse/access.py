@@ -53,6 +53,8 @@ Best Practice on Implementation
 from typing import Any, Union
 import pandas as pd
 import logging
+import osmnx as ox
+import matplotlib.pyplot as plt
 
 # Set up basic logging
 logging.basicConfig(
@@ -126,3 +128,23 @@ def data() -> Union[pd.DataFrame, None]:
         logger.error(f"Unexpected error loading data: {e}")
         print(f"Error loading data: {e}")
         return None
+
+
+def get_osm_datapoints(latitude, longitude, use_km=True, box_size_km=2):
+    
+    if use_km:
+        # Define box width and height
+        box_width = box_size_km/111 # 111km = 1 degree at the equator
+        box_height = box_size_km/111
+    else:
+        box_height = 0.02
+        box_width = 0.02
+
+    north = latitude + box_height/2
+    south = latitude - box_height/2
+    west = longitude - box_width/2
+    east = longitude + box_width/2
+
+    # Get bounding box
+    bbox = (west, south, east, north)
+    return bbox

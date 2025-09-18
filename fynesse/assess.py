@@ -4,6 +4,9 @@ import logging
 
 from .config import *
 from . import access
+import osmnx as ox
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -111,3 +114,153 @@ def view(data: Union[pd.DataFrame, Any]) -> None:
 def labelled(data: Union[pd.DataFrame, Any]) -> Union[pd.DataFrame, Any]:
     """Provide a labelled set of data ready for supervised learning."""
     raise NotImplementedError
+
+def get_osm_features(bbox, place_name, tags):
+    pois = ox.features_from_bbox(bbox, tags)
+    area = None
+    if place_name:
+        area = ox.geocode_to_gdf(place_name)
+    graph = ox.graph_from_bbox(bbox)
+    nodes, edges = ox.graph_to_gdfs(graph)
+
+    return pois, area, nodes, edges
+
+def get_pois_df(pois):
+    pois_df = pd.DataFrame(pois)
+    pois_df['latitude'] = pois_df.apply(lambda row: row.geometry.centroid.y, axis=1)
+    pois_df['longitude'] = pois_df.apply(lambda row: row.geometry.centroid.x, axis=1)
+    return pois_df
+
+def get_feature_vector(latitude, longitude, box_size_km=2, features=None):
+    """
+    Given a central point (latitude, longitude) and a bounding box size,
+    query OpenStreetMap via OSMnx and return a feature vector.
+
+    Parameters
+    ----------
+    latitude : float
+        Latitude of the center point.
+    longitude : float
+        Longitude of the center point.
+    box_size : float
+        Size of the bounding box in kilometers
+    features : list of tuples
+        List of (key, value) pairs to count. Example:
+        [
+            ("amenity", None),
+            ("amenity", "school"),
+            ("shop", None),
+            ("tourism", "hotel"),
+        ]
+
+    Returns
+    -------
+    feature_vector : dict
+        Dictionary of feature counts, keyed by (key, value).
+    """
+    from osmnx.features import InsufficientResponseError
+
+    bbox = access.get_osm_datapoints(latitude, longitude)
+
+    # Query OSMnx for features
+    tags = {}
+    for feature in features:
+        tags[feature[0]] = True
+    try:
+      pois = get_osm_features(bbox, None, tags)[0]
+    except InsufficientResponseError:
+      return {}
+
+    # Count features matching each (key, value) in poi_types
+    pois_df = get_pois_df(pois)
+
+    # Return dictionary of counts
+    poi_counts = {}
+
+    for key, value in features:
+        if key in pois_df.columns:
+            if value:  # count only that value
+                poi_counts[f"{key}:{value}"] = (pois_df[key] == value).sum()
+            else:  # count any non-null entry
+                poi_counts[key] = pois_df[key].notnull().sum()
+        else:
+            poi_counts[f"{key}:{value}" if value else key] = 0
+
+    return poi_counts
+
+def build_feature_dataframe(city_dicts, features, box_size_km=1):
+    results = {}
+    for country, cities in city_dicts:
+        for city, coords in cities.items():
+            vec = get_feature_vector(
+                coords["latitude"],
+                coords["longitude"],
+                box_size_km=box_size_km,
+                features=features
+            )
+            vec["country"] = country
+            results[city] = vec
+    return pd.DataFrame(results).T
+
+def visualize_feature_space(df, X, label1, label2, label1_color, label2_color):
+    pca = PCA(n_components=2)
+    X_proj = pca.fit_transform(X)
+    plt.figure(figsize=(8,6))
+    for label, color in [(label1, label1_color), (label2, label2_color)]:
+        mask = (y == label)
+        plt.scatter(X_proj[mask, 0], X_proj[mask, 1],
+                    label=label, color=color, s=100, alpha=0.7)
+
+    for i, feature in enumerate(df.index):
+        plt.text(X_proj[i,0]+0.02, X_proj[i,1], feature, fontsize=8)
+    plt.xlabel("PC1")
+    plt.ylabel("PC2")
+    plt.title("2D projection of feature vectors")
+    plt.legend()
+    plt.show()
+
+def plot_city_map(city, country, latitude=None, longitude=None, box_size=2, plot_from_place=False):
+    """
+    Plot a map of a city with points of interest.
+    """
+    tags = {
+    "amenity": True,
+    "buildings": True,
+    "historic": True,
+    "leisure": True,
+    "shop": True,
+    "tourism": True,
+    "religion": True,
+    "memorial": True
+    }
+    place_name = f"{city}, {country}"
+
+    if latitude or longitude:
+        # Get bbox
+        bbox = access.get_osm_datapoints(latitude, longitude)
+        pois = ox.features_from_bbox(bbox, tags=tags)
+
+        # Get graph elements
+        graph = ox.graph_from_bbox(bbox)
+        area = ox.geocode_to_gdf(place_name)
+        nodes, edges = ox.graph_to_gdfs(graph)
+        buildings = ox.features_from_bbox(bbox, tags={"building": True})
+
+    if plot_from_place:
+        graph = ox.graph_from_place(place_name, network_type='all')
+        pois = ox.features_from_place(place_name, tags=tags)
+        area = ox.geocode_to_gdf(place_name)
+        nodes, edges = ox.graph_to_gdfs(graph)
+        buildings = ox.features_from_place(place_name, tags={"building": True})
+
+    # Plot the city map
+    fig, ax = plt.subplots(figsize=(6,6))
+    area.plot(ax=ax, color="tan", alpha=0.5)
+    buildings.plot(ax=ax, facecolor="gray", edgecolor="gray")
+    edges.plot(ax=ax, linewidth=1, edgecolor="black", alpha=0.3)
+    nodes.plot(ax=ax, color="black", markersize=1, alpha=0.3)
+    pois.plot(ax=ax, color="green", markersize=5, alpha=1)
+    ax.set_xlim(bbox[0], bbox[2])
+    ax.set_ylim(bbox[1], bbox[3])
+    ax.set_title(place_name, fontsize=14)
+    plt.show()
