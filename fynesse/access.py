@@ -63,7 +63,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def data() -> Union[pd.DataFrame, None]:
+def data(file_path:str) -> Union[pd.DataFrame, None]:
     """
     Read the data from the web or local file, returning structured format such as a data frame.
 
@@ -108,7 +108,7 @@ def data() -> Union[pd.DataFrame, None]:
         # IMPLEMENTATION: Replace this with your actual data loading code
         # Example: Load data from a CSV file
         logger.info("Loading data from data.csv")
-        df = pd.read_csv("data.csv")
+        df = pd.read_csv(file_path)
 
         # Basic validation
         if df.empty:
